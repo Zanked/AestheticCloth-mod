@@ -13,13 +13,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the history is needed to find the most recently uploaded archive
 
-      - name: Unpack the mod archive
+      - name: Unpack the mod archive (any name)
         run: |
           set -e
-          test -f fitting-room-mod.zip || { echo "fitting-room-mod.zip not found"; exit 1; }
-          rm -rf src docs
-          unzip -q -o fitting-room-mod.zip
+          # every .zip in the repository, except what the build itself creates
+          mapfile -t ZIPS < <(git ls-files '*.zip')
+          if [ "${#ZIPS[@]}" -eq 0 ]; then
+            echo "No .zip archive found in the repository"; exit 1
+          fi
+          # take the archive that was changed last (the newest upload wins)
+          BEST=""; BEST_TIME=0
+          for z in "${ZIPS[@]}"; do
+            t=$(git log -1 --format=%ct -- "$z")
+            if [ "$t" -ge "$BEST_TIME" ]; then BEST="$z"; BEST_TIME="$t"; fi
+          done
+          echo "Using archive: $BEST"
+
+          rm -rf "$RUNNER_TEMP/unpacked"
+          mkdir -p "$RUNNER_TEMP/unpacked"
+          unzip -q -o "$BEST" -d "$RUNNER_TEMP/unpacked"
+
+          # the project may be at the top of the archive or inside one folder
+          ROOT="$RUNNER_TEMP/unpacked"
+          if [ ! -f "$ROOT/build.gradle" ]; then
+            FOUND=$(find "$ROOT" -maxdepth 3 -name build.gradle -not -path '*/node_modules/*' | head -n 1)
+            if [ -z "$FOUND" ]; then echo "build.gradle not found in $BEST"; exit 1; fi
+            ROOT=$(dirname "$FOUND")
+          fi
+
+          # replace the old sources with the ones from the archive
+          rm -rf src docs libs tools build.gradle gradle.properties settings.gradle
+          cp -a "$ROOT"/. .
+          rm -rf "$RUNNER_TEMP/unpacked"
 
       - uses: actions/setup-java@v4
         with:
